@@ -3,6 +3,9 @@ from typing import Any, Optional, Type, TypeVar, Union, overload
 from sqlalchemy import Column
 from sqlalchemy.orm.query import Query
 
+from sqlalchemy.orm.query import Query
+
+
 class _SessionClassMethods(object):
     @classmethod
     def close_all(cls): ...

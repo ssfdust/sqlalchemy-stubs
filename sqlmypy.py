@@ -1,15 +1,42 @@
 from mypy.mro import calculate_mro, MroError
 from mypy.plugin import (
-    Plugin, FunctionContext, ClassDefContext, DynamicClassDefContext,
-    SemanticAnalyzerPluginInterface
+    Plugin,
+    FunctionContext,
+    ClassDefContext,
+    DynamicClassDefContext,
+    SemanticAnalyzerPluginInterface,
+    MethodContext,
 )
 from mypy.plugins.common import add_method
 from mypy.nodes import (
-    NameExpr, Expression, StrExpr, TypeInfo, ClassDef, Block, SymbolTable, SymbolTableNode, GDEF,
-    Argument, Var, ARG_STAR2, MDEF, TupleExpr, RefExpr, FuncBase, SymbolNode
+    NameExpr,
+    Expression,
+    StrExpr,
+    TypeInfo,
+    ClassDef,
+    Block,
+    SymbolTable,
+    SymbolTableNode,
+    GDEF,
+    Argument,
+    Var,
+    ARG_STAR2,
+    MDEF,
+    TupleExpr,
+    RefExpr,
+    FuncBase,
+    SymbolNode,
 )
 from mypy.types import (
-    UnionType, NoneTyp, Instance, Type, AnyType, TypeOfAny, UninhabitedType, CallableType
+    UnionType,
+    NoneTyp,
+    Instance,
+    Type,
+    AnyType,
+    TypeOfAny,
+    UninhabitedType,
+    CallableType,
+    TupleType,
 )
 from mypy.typevars import fill_typevars_with_any
 
@@ -24,17 +51,19 @@ MYPY = False  # we should support Python 3.5.1 and cases where typing_extensions
 if MYPY:
     from typing_extensions import Final, Type as TypingType
 
-T = TypeVar('T')
+T = TypeVar("T")
 CB = Optional[Callable[[T], None]]
 
-COLUMN_NAME = 'sqlalchemy.sql.schema.Column'  # type: Final
-CLAUSE_ELEMENT_NAME = 'sqlalchemy.sql.elements.ClauseElement'  # type: Final
-COLUMN_ELEMENT_NAME = 'sqlalchemy.sql.elements.ColumnElement'  # type: Final
-GROUPING_NAME = 'sqlalchemy.sql.elements.Grouping'  # type: Final
-RELATIONSHIP_NAME = 'sqlalchemy.orm.relationships.RelationshipProperty'  # type: Final
+COLUMN_NAME = "sqlalchemy.sql.schema.Column"  # type: Final
+CLAUSE_ELEMENT_NAME = "sqlalchemy.sql.elements.ClauseElement"  # type: Final
+COLUMN_ELEMENT_NAME = "sqlalchemy.sql.elements.ColumnElement"  # type: Final
+GROUPING_NAME = "sqlalchemy.sql.elements.Grouping"  # type: Final
+RELATIONSHIP_NAME = "sqlalchemy.orm.relationships.RelationshipProperty"  # type: Final
+SESSION_QUERY_NAME = "sqlalchemy.orm.session.Session.query"  # type: Final
 
 
 # See https://github.com/python/mypy/issues/6617 for plugin API updates.
+
 
 def fullname(x: Union[FuncBase, SymbolNode]) -> str:
     """Compatibility helper for mypy 0.750 vs older."""
@@ -56,15 +85,15 @@ def is_declarative(info: TypeInfo) -> bool:
     """Check if this is a subclass of a declarative base."""
     if info.mro:
         for base in info.mro:
-            metadata = base.metadata.get('sqlalchemy')
-            if metadata and metadata.get('declarative_base'):
+            metadata = base.metadata.get("sqlalchemy")
+            if metadata and metadata.get("declarative_base"):
                 return True
     return False
 
 
 def set_declarative(info: TypeInfo) -> None:
     """Record given class as a declarative base."""
-    info.metadata.setdefault('sqlalchemy', {})['declarative_base'] = True
+    info.metadata.setdefault("sqlalchemy", {})["declarative_base"] = True
 
 
 class BasicSQLAlchemyPlugin(Plugin):
@@ -76,7 +105,10 @@ class BasicSQLAlchemyPlugin(Plugin):
       * Provide better types for 'Column's and 'RelationshipProperty's
         using flags 'primary_key', 'nullable', 'uselist', etc.
     """
-    def get_function_hook(self, fullname: str) -> Optional[Callable[[FunctionContext], Type]]:
+
+    def get_function_hook(
+        self, fullname: str
+    ) -> Optional[Callable[[FunctionContext], Type]]:
         if fullname == COLUMN_NAME:
             return column_hook
         if fullname == GROUPING_NAME:
@@ -90,17 +122,25 @@ class BasicSQLAlchemyPlugin(Plugin):
                 return model_hook
         return None
 
-    def get_dynamic_class_hook(self, fullname: str) -> 'CB[DynamicClassDefContext]':
-        if fullname == 'sqlalchemy.ext.declarative.api.declarative_base':
+    def get_method_hook(
+        self, fullname: str
+    ) -> Optional[Callable[[MethodContext], Type]]:
+        if fullname == SESSION_QUERY_NAME:
+            return session_query_hook
+
+        return None
+
+    def get_dynamic_class_hook(self, fullname: str) -> "CB[DynamicClassDefContext]":
+        if fullname == "sqlalchemy.ext.declarative.api.declarative_base":
             return decl_info_hook
         return None
 
-    def get_class_decorator_hook(self, fullname: str) -> 'CB[ClassDefContext]':
-        if fullname == 'sqlalchemy.ext.declarative.api.as_declarative':
+    def get_class_decorator_hook(self, fullname: str) -> "CB[ClassDefContext]":
+        if fullname == "sqlalchemy.ext.declarative.api.as_declarative":
             return decl_deco_hook
         return None
 
-    def get_base_class_hook(self, fullname: str) -> 'CB[ClassDefContext]':
+    def get_base_class_hook(self, fullname: str) -> "CB[ClassDefContext]":
         sym = self.lookup_fully_qualified(fullname)
         if sym and isinstance(sym.node, TypeInfo):
             if is_declarative(sym.node):
@@ -115,7 +155,7 @@ def add_var_to_class(name: str, typ: Type, info: TypeInfo) -> None:
     """
     var = Var(name)
     var.info = info
-    var._fullname = fullname(info) + '.' + name
+    var._fullname = fullname(info) + "." + name
     var.type = typ
     info.names[name] = SymbolTableNode(MDEF, var)
 
@@ -126,34 +166,36 @@ def add_model_init_hook(ctx: ClassDefContext) -> None:
     Instantiation will be checked more precisely when we inferred types
     (using get_function_hook and model_hook).
     """
-    if '__init__' in ctx.cls.info.names:
+    if "__init__" in ctx.cls.info.names:
         # Don't override existing definition.
         return
     any = AnyType(TypeOfAny.special_form)
-    var = Var('kwargs', any)
-    kw_arg = Argument(variable=var, type_annotation=any, initializer=None, kind=ARG_STAR2)
-    add_method(ctx, '__init__', [kw_arg], NoneTyp())
-    ctx.cls.info.metadata.setdefault('sqlalchemy', {})['generated_init'] = True
+    var = Var("kwargs", any)
+    kw_arg = Argument(
+        variable=var, type_annotation=any, initializer=None, kind=ARG_STAR2
+    )
+    add_method(ctx, "__init__", [kw_arg], NoneTyp())
+    ctx.cls.info.metadata.setdefault("sqlalchemy", {})["generated_init"] = True
 
     # Also add a selection of auto-generated attributes.
-    sym = ctx.api.lookup_fully_qualified_or_none('sqlalchemy.sql.schema.Table')
+    sym = ctx.api.lookup_fully_qualified_or_none("sqlalchemy.sql.schema.Table")
     if sym:
         assert isinstance(sym.node, TypeInfo)
         typ = Instance(sym.node, [])  # type: Type
     else:
         typ = AnyType(TypeOfAny.special_form)
-    add_var_to_class('__table__', typ, ctx.cls.info)
+    add_var_to_class("__table__", typ, ctx.cls.info)
 
 
 def add_metadata_var(api: SemanticAnalyzerPluginInterface, info: TypeInfo) -> None:
     """Add .metadata attribute to a declarative base."""
-    sym = api.lookup_fully_qualified_or_none('sqlalchemy.sql.schema.MetaData')
+    sym = api.lookup_fully_qualified_or_none("sqlalchemy.sql.schema.MetaData")
     if sym:
         assert isinstance(sym.node, TypeInfo)
         typ = Instance(sym.node, [])  # type: Type
     else:
         typ = AnyType(TypeOfAny.special_form)
-    add_var_to_class('metadata', typ, info)
+    add_var_to_class("metadata", typ, info)
 
 
 def decl_deco_hook(ctx: ClassDefContext) -> None:
@@ -181,7 +223,7 @@ def decl_info_hook(ctx: DynamicClassDefContext) -> None:
     cls_bases = []  # type: List[Instance]
 
     # Passing base classes as positional arguments is currently not handled.
-    if 'cls' in ctx.call.arg_names:
+    if "cls" in ctx.call.arg_names:
         declarative_base_cls_arg = ctx.call.args[ctx.call.arg_names.index("cls")]
         if isinstance(declarative_base_cls_arg, TupleExpr):
             items = [item for item in declarative_base_cls_arg.items]
@@ -200,7 +242,7 @@ def decl_info_hook(ctx: DynamicClassDefContext) -> None:
 
     info = TypeInfo(SymbolTable(), class_def, ctx.api.cur_mod_id)
     class_def.info = info
-    obj = ctx.api.builtin_type('builtins.object')
+    obj = ctx.api.builtin_type("builtins.object")
     info.bases = cls_bases or [obj]
     try:
         calculate_mro(info)
@@ -225,8 +267,8 @@ def model_hook(ctx: FunctionContext) -> Type:
     """
     assert isinstance(ctx.default_return_type, Instance)  # type: ignore[misc]
     model = ctx.default_return_type.type
-    metadata = model.metadata.get('sqlalchemy')
-    if not metadata or not metadata.get('generated_init'):
+    metadata = model.metadata.get("sqlalchemy")
+    if not metadata or not metadata.get("generated_init"):
         return ctx.default_return_type
 
     # Collect column names and types defined in the model
@@ -249,16 +291,22 @@ def model_hook(ctx: FunctionContext) -> Type:
             # TODO: support TypedDict?
             continue
         if actual_name not in expected_types:
-            ctx.api.fail('Unexpected column "{}" for model "{}"'.format(actual_name,
-                                                                        shortname(model)),
-                         ctx.context)
+            ctx.api.fail(
+                'Unexpected column "{}" for model "{}"'.format(
+                    actual_name, shortname(model)
+                ),
+                ctx.context,
+            )
             continue
         # Using private API to simplify life.
-        ctx.api.check_subtype(actual_type, expected_types[actual_name],  # type: ignore
-                              ctx.context,
-                              'Incompatible type for "{}" of "{}"'.format(actual_name,
-                                                                          shortname(model)),
-                              'got', 'expected')
+        ctx.api.check_subtype(
+            actual_type,
+            expected_types[actual_name],  # type: ignore
+            ctx.context,
+            'Incompatible type for "{}" of "{}"'.format(actual_name, shortname(model)),
+            "got",
+            "expected",
+        )
     return ctx.default_return_type
 
 
@@ -303,9 +351,9 @@ def column_hook(ctx: FunctionContext) -> Type:
     """
     assert isinstance(ctx.default_return_type, Instance)  # type: ignore[misc]
 
-    nullable_arg = get_argument_by_name(ctx, 'nullable')
-    primary_arg = get_argument_by_name(ctx, 'primary_key')
-    default_arg = get_argument_by_name(ctx, 'default')
+    nullable_arg = get_argument_by_name(ctx, "nullable")
+    primary_arg = get_argument_by_name(ctx, "primary_key")
+    default_arg = get_argument_by_name(ctx, "default")
 
     if nullable_arg:
         nullable = parse_bool(nullable_arg)
@@ -320,9 +368,12 @@ def column_hook(ctx: FunctionContext) -> Type:
         return ctx.default_return_type
     assert len(ctx.default_return_type.args) == 1
     arg_type = ctx.default_return_type.args[0]
-    return Instance(ctx.default_return_type.type, [UnionType([arg_type, NoneTyp()])],
-                    line=ctx.default_return_type.line,
-                    column=ctx.default_return_type.column)
+    return Instance(
+        ctx.default_return_type.type,
+        [UnionType([arg_type, NoneTyp()])],
+        line=ctx.default_return_type.line,
+        column=ctx.default_return_type.column,
+    )
 
 
 def grouping_hook(ctx: FunctionContext) -> Type:
@@ -335,11 +386,12 @@ def grouping_hook(ctx: FunctionContext) -> Type:
     """
     assert isinstance(ctx.default_return_type, Instance)  # type: ignore[misc]
 
-    element_arg_type = get_proper_type(get_argtype_by_name(ctx, 'element'))
+    element_arg_type = get_proper_type(get_argtype_by_name(ctx, "element"))
 
     if element_arg_type is not None and isinstance(element_arg_type, Instance):
-        if (element_arg_type.type.has_base(CLAUSE_ELEMENT_NAME) and not
-                element_arg_type.type.has_base(COLUMN_ELEMENT_NAME)):
+        if element_arg_type.type.has_base(
+            CLAUSE_ELEMENT_NAME
+        ) and not element_arg_type.type.has_base(COLUMN_ELEMENT_NAME):
             return ctx.default_return_type.copy_modified(args=[NoneTyp()])
     return ctx.default_return_type
 
@@ -367,10 +419,10 @@ def relationship_hook(ctx: FunctionContext) -> Type:
     original_type_arg = ctx.default_return_type.args[0]
     has_annotation = not isinstance(get_proper_type(original_type_arg), UninhabitedType)
 
-    arg = get_argument_by_name(ctx, 'argument')
-    arg_type = get_proper_type(get_argtype_by_name(ctx, 'argument'))
+    arg = get_argument_by_name(ctx, "argument")
+    arg_type = get_proper_type(get_argtype_by_name(ctx, "argument"))
 
-    uselist_arg = get_argument_by_name(ctx, 'uselist')
+    uselist_arg = get_argument_by_name(ctx, "uselist")
 
     if isinstance(arg, StrExpr):
         name = arg.value
@@ -385,9 +437,11 @@ def relationship_hook(ctx: FunctionContext) -> Type:
         else:
             ctx.api.fail('Cannot find model "{}"'.format(name), ctx.context)
             # TODO: Add note() to public API.
-            ctx.api.note('Only imported models can be found;'  # type: ignore
-                         ' use "if TYPE_CHECKING: ..." to avoid import cycles',
-                         ctx.context)
+            ctx.api.note(
+                "Only imported models can be found;"  # type: ignore
+                ' use "if TYPE_CHECKING: ..." to avoid import cycles',
+                ctx.context,
+            )
             new_arg = AnyType(TypeOfAny.from_error)
     else:
         if isinstance(arg_type, CallableType) and arg_type.is_type_obj():
@@ -399,27 +453,78 @@ def relationship_hook(ctx: FunctionContext) -> Type:
     # We figured out, the model type. Now check if we need to wrap it in Iterable
     if uselist_arg:
         if parse_bool(uselist_arg):
-            new_arg = ctx.api.named_generic_type('typing.Iterable', [new_arg])
+            new_arg = ctx.api.named_generic_type("typing.Iterable", [new_arg])
     else:
         if has_annotation:
             # If there is an annotation we use it as a source of truth.
             # This will cause false negatives, but it is better than lots of false positives.
             new_arg = original_type_arg
 
-    return Instance(ctx.default_return_type.type, [new_arg],
-                    line=ctx.default_return_type.line,
-                    column=ctx.default_return_type.column)
+    return Instance(
+        ctx.default_return_type.type,
+        [new_arg],
+        line=ctx.default_return_type.line,
+        column=ctx.default_return_type.column,
+    )
+
+
+def session_query_hook(ctx: MethodContext) -> Type:
+    """
+    Turns session.query(...) into typed Query.
+
+    Examples:
+
+        session.query(User) -> Query[User]
+        session.query(User, Order) -> Query[Tuple[User, Order]]
+        session.query(User, User.id) -> Query[Tuple[User, int]]
+        session.query(User.id) -> Query[Tuple[int]]
+    """
+    # TODO take a look at Session.query_cls? Do we have to do this with generics?
+
+    cnt_entities = 0
+
+    def map_arg(arg: Type) -> Type:
+        nonlocal cnt_entities
+        # A model class (well, in this case a callable constructor)
+        # Example:
+        # session.query(Employee) -> Query[Employee]
+        if isinstance(arg, CallableType) and arg.is_type_obj():
+            cnt_entities += 1
+            return arg.ret_type
+
+        # Example:
+        # session.query(Employee.id, ...) -> Query[int, ...]
+        if isinstance(arg, Instance) and arg.type.fullname() == COLUMN_NAME:
+            assert (
+                len(arg.args) == 1
+            ), "Column[...] should have only one generic argument"
+            return arg.args[0]
+
+        return AnyType(TypeOfAny.implementation_artifact)
+
+    # take positional arguments and map them
+    args = [map_arg(arg) for arg in ctx.arg_types[0]]
+
+    if len(args) == 1 and (cnt_entities == 1 or isinstance(args[0], AnyType)):
+        # when there is a single class passed as an argument
+        # or when we can't detect what the single argument is (Any)
+        final_arg = args[0]
+    else:
+        fallback = ctx.api.named_type("sqlalchemy.util._collections.AbstractKeyedTuple")  # type: ignore
+        final_arg = TupleType(args, fallback, implicit=True)
+
+    return ctx.api.named_generic_type("sqlalchemy.orm.Query", [final_arg])
 
 
 # We really need to add this to TypeChecker API
 def parse_bool(expr: Expression) -> Optional[bool]:
     if isinstance(expr, NameExpr):
-         if expr.fullname == 'builtins.True':
-             return True
-         if expr.fullname == 'builtins.False':
-             return False
+        if expr.fullname == "builtins.True":
+            return True
+        if expr.fullname == "builtins.False":
+            return False
     return None
 
 
-def plugin(version: str) -> 'TypingType[Plugin]':
+def plugin(version: str) -> "TypingType[Plugin]":
     return BasicSQLAlchemyPlugin
