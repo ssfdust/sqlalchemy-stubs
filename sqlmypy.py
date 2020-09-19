@@ -494,7 +494,7 @@ def session_query_hook(ctx: MethodContext) -> Type:
 
         # Example:
         # session.query(Employee.id, ...) -> Query[int, ...]
-        if isinstance(arg, Instance) and arg.type.fullname() == COLUMN_NAME:
+        if isinstance(arg, Instance) and fullname(arg.type) == COLUMN_NAME:
             assert (
                 len(arg.args) == 1
             ), "Column[...] should have only one generic argument"
@@ -510,7 +510,7 @@ def session_query_hook(ctx: MethodContext) -> Type:
         # or when we can't detect what the single argument is (Any)
         final_arg = args[0]
     else:
-        fallback = ctx.api.named_type("sqlalchemy.util._collections.AbstractKeyedTuple")  # type: ignore
+        fallback = ctx.api.named_type("sqlalchemy.util.KeyedTuple")  # type: ignore
         final_arg = TupleType(args, fallback, implicit=True)
 
     return ctx.api.named_generic_type("sqlalchemy.orm.Query", [final_arg])
